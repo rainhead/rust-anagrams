@@ -1,9 +1,9 @@
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::fs::read_to_string;
+use rpds::HashTrieMap;
+use std::collections::btree_map::Entry;
+use std::fs::File;
 use std::io;
+use std::io::{BufRead, Lines};
 use std::path::PathBuf;
-use std::str::Lines;
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]
@@ -17,22 +17,21 @@ struct Opts {
 
 fn main() -> io::Result<()> {
     let opts: Opts = Opts::from_args();
-    let dictionary = read_to_string(&opts.dictionary)?;
-    let dictionary_entries = dictionary.lines();
+    let dictionary = File::open(&opts.dictionary)?.lines().collect::<Vec<&str>>();
     let input_char_counts = char_counts(&opts.input);
 
-    let anagrams = Anagrams::new(input_char_counts, dictionary_entries);
+    let anagrams = Anagrams::new(input_char_counts, &dictionary);
     traverse(anagrams, &mut Vec::new(), opts.max_words);
     Ok(())
 }
 
-fn char_counts(input: &str) -> HashMap<char, usize> {
-    let mut char_count = HashMap::with_capacity(input.len());
-    for character in input.chars() {
-        if character.is_alphabetic() {
-            let entry = char_count.entry(character.to_ascii_lowercase()).or_insert(0);
-            *entry += 1;
-        }
+fn char_counts(input: &str) -> HashTrieMap<char, usize> {
+    let mut char_count = HashTrieMap::new();
+    let chars = input.chars()
+        .filter(|c| c.is_alphabetic())
+        .map(|c| c.to_ascii_lowercase());
+    for c in chars {
+        *char_count.entry(c).or_default() += 1;
     }
     char_count
 }
@@ -46,29 +45,29 @@ fn traverse<'a>(mut anagrams: Anagrams<'a>, path: &mut Vec<&'a str>, remaining_d
                     traverse(child, path, remaining_depth.map(|depth| depth - 1));
                     path.pop();
                 }
-            },
+            }
             AnagramTree::Leaf(word) => {
                 println!("{} {} ", path.join(" "), word);
-            },
+            }
         }
     }
 }
 
 enum AnagramTree<'a> {
-    Tree((&'a str, Anagrams<'a>)),
+    Tree((&'a str, Anagrams)),
     Leaf(&'a str),
 }
 
 struct Anagrams<'a> {
-    dictionary_entries: Lines<'a>,
-    remaining_chars: HashMap<char, usize>,
+    dictionary_entries: &'a [&'a str],
+    remaining_chars: HashTrieMap<char, usize>,
 }
 
-impl<'a> Iterator for Anagrams<'a> {
-    type Item = AnagramTree<'a>;
+impl Iterator for Anagrams {
+    type Item = AnagramTree;
 
     fn next(&mut self) -> Option<Self::Item> {
-        'words: while let Some(word) = self.dictionary_entries.next() {
+        'word: while let Some(word) = self.dictionary_entries.next() {
             let mut working_chars = self.remaining_chars.clone();
             for c in word.chars() {
                 if let Entry::Occupied(entry) = working_chars.entry(c).and_modify(|ct| *ct -= 1) {
@@ -76,7 +75,7 @@ impl<'a> Iterator for Anagrams<'a> {
                         entry.remove();
                     }
                 } else {
-                    continue 'words;
+                    continue 'word;
                 }
             }
             if working_chars.is_empty() {
@@ -92,7 +91,7 @@ impl<'a> Iterator for Anagrams<'a> {
 }
 
 impl<'a> Anagrams<'a> {
-    fn new(remaining_chars: HashMap<char, usize>, dictionary_entries: Lines<'a>) -> Self {
+    fn new(remaining_chars: HashTrieMap<char, usize>, dictionary_entries: &[&str]) -> Self {
         Self {
             dictionary_entries,
             remaining_chars,
