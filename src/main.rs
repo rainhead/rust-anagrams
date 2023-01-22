@@ -1,100 +1,100 @@
-use rpds::HashTrieMap;
-use std::collections::btree_map::Entry;
+use rpds::{HashTrieMap, Stack};
 use std::fs::File;
 use std::io;
-use std::io::{BufRead, Lines};
+use std::io::BufRead;
 use std::path::PathBuf;
+use std::rc::Rc;
 use structopt::StructOpt;
+
+type CharCounts = HashTrieMap<char, usize>;
 
 #[derive(StructOpt, Debug)]
 struct Opts {
     #[structopt(short, long, default_value = "/usr/share/dict/words")]
     dictionary: PathBuf,
     input: String,
-    #[structopt(short, long)]
-    max_words: Option<u8>,
 }
 
 fn main() -> io::Result<()> {
     let opts: Opts = Opts::from_args();
-    let dictionary = File::open(&opts.dictionary)?.lines().collect::<Vec<&str>>();
-    let input_char_counts = char_counts(&opts.input);
-
-    let anagrams = Anagrams::new(input_char_counts, &dictionary);
-    traverse(anagrams, &mut Vec::new(), opts.max_words);
+    // consider (and copy to heap) only words that could make up part of the input word
+    let dictionary =
+        io::BufReader::new(File::open(&opts.dictionary)?)
+            .lines()
+            .map(Result::unwrap)
+            .filter(|candidate| opts.input.ne(candidate))
+            .map(|candidate| {
+                let counts = char_counts(&candidate);
+                (Rc::new(candidate), counts)
+            })
+            .collect();
+    for phrase in anagrams(&opts.input, &dictionary) {
+        for (idx, word) in phrase.iter().enumerate() {
+            if idx != 0 {
+                print!(" ");
+            }
+            print!("{}", word);
+        }
+        println!();
+    }
     Ok(())
 }
 
-fn char_counts(input: &str) -> HashTrieMap<char, usize> {
-    let mut char_count = HashTrieMap::new();
-    let chars = input.chars()
-        .filter(|c| c.is_alphabetic())
-        .map(|c| c.to_ascii_lowercase());
-    for c in chars {
-        *char_count.entry(c).or_default() += 1;
-    }
-    char_count
-}
-
-fn traverse<'a>(mut anagrams: Anagrams<'a>, path: &mut Vec<&'a str>, remaining_depth: Option<u8>) {
-    while let Some(tree) = anagrams.next() {
-        match tree {
-            AnagramTree::Tree((word, child)) => {
-                if remaining_depth != Some(0) {
-                    path.push(word);
-                    traverse(child, path, remaining_depth.map(|depth| depth - 1));
-                    path.pop();
-                }
-            }
-            AnagramTree::Leaf(word) => {
-                println!("{} {} ", path.join(" "), word);
-            }
+fn char_counts(input: &str) -> CharCounts {
+    let mut char_counts = CharCounts::new();
+    let lower_input = input.to_lowercase();
+    for c in lower_input.chars() {
+        if let Some(count) = char_counts.get_mut(&c) {
+            *count += 1;
+        } else {
+            char_counts.insert_mut(c, 1);
         }
     }
+    char_counts
 }
 
-enum AnagramTree<'a> {
-    Tree((&'a str, Anagrams)),
-    Leaf(&'a str),
+fn deduct(from: &CharCounts, counts: &CharCounts) -> Option<CharCounts> {
+    let mut difference = from.clone();
+    for (char, subtrahend) in counts.iter() {
+        match from.get(&char) {
+            Some(minuend) if minuend.eq(subtrahend) => { difference.remove_mut(char); }
+            Some(minuend) if minuend.gt(subtrahend) => { difference.insert_mut(*char, minuend - subtrahend); }
+            _ => return None
+        }
+    }
+    Some(difference)
 }
 
-struct Anagrams<'a> {
-    dictionary_entries: &'a [&'a str],
-    remaining_chars: HashTrieMap<char, usize>,
+fn anagrams(
+    input: &str,
+    dictionary: &HashTrieMap<Rc<String>, CharCounts>
+) -> Vec<Stack<Rc<String>>> {
+    let mut anagrams = Vec::new();
+    let input_char_counts = char_counts(input);
+    anagrams_recurse(input_char_counts, dictionary, &Stack::new(), &mut anagrams);
+    anagrams
 }
 
-impl Iterator for Anagrams {
-    type Item = AnagramTree;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        'word: while let Some(word) = self.dictionary_entries.next() {
-            let mut working_chars = self.remaining_chars.clone();
-            for c in word.chars() {
-                if let Entry::Occupied(entry) = working_chars.entry(c).and_modify(|ct| *ct -= 1) {
-                    if *entry.get() == 0 {
-                        entry.remove();
-                    }
-                } else {
-                    continue 'word;
-                }
-            }
+fn anagrams_recurse(
+    remaining_chars: CharCounts,
+    dictionary: &HashTrieMap<Rc<String>, CharCounts>,
+    working_phrase: &Stack<Rc<String>>,
+    anagrams: &mut Vec<Stack<Rc<String>>>
+) {
+    // The dictionary to be used as we recurse, with words we know aren't worth checking removed
+    let mut dictionary_out = dictionary.clone();
+    for (word, char_counts) in dictionary.iter() {
+        if let Some(working_chars) = deduct(&remaining_chars, char_counts) {
+            let working_phrase= working_phrase.push(word.clone());
             if working_chars.is_empty() {
-                return Some(AnagramTree::Leaf(word));
+                anagrams.push(working_phrase);
+                continue;
+            } else {
+                anagrams_recurse(working_chars, &dictionary_out, &working_phrase, anagrams);
             }
-            return Some(AnagramTree::Tree((word, Anagrams {
-                dictionary_entries: self.dictionary_entries.clone(),
-                remaining_chars: working_chars.clone(),
-            })));
-        }
-        None
-    }
-}
-
-impl<'a> Anagrams<'a> {
-    fn new(remaining_chars: HashTrieMap<char, usize>, dictionary_entries: &[&str]) -> Self {
-        Self {
-            dictionary_entries,
-            remaining_chars,
+        } else {
+            // don't use this word when recursing in a later iteration
+            dictionary_out.remove_mut(word);
         }
     }
 }
