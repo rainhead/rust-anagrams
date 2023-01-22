@@ -1,9 +1,6 @@
 use rpds::{HashTrieMap, Stack};
-use std::fs::File;
-use std::io;
-use std::io::BufRead;
+use std::{fs, io};
 use std::path::PathBuf;
-use std::rc::Rc;
 use structopt::StructOpt;
 
 type CharCounts = HashTrieMap<char, usize>;
@@ -18,17 +15,9 @@ struct Opts {
 fn main() -> io::Result<()> {
     let opts: Opts = Opts::from_args();
     // consider (and copy to heap) only words that could make up part of the input word
-    let dictionary =
-        io::BufReader::new(File::open(&opts.dictionary)?)
-            .lines()
-            .map(Result::unwrap)
-            .filter(|candidate| opts.input.ne(candidate))
-            .map(|candidate| {
-                let counts = char_counts(&candidate);
-                (Rc::new(candidate), counts)
-            })
-            .collect();
-    for phrase in anagrams(&opts.input, &dictionary) {
+    let dictionary = fs::read_to_string(&opts.dictionary)?;
+    let words = dictionary.lines();
+    for phrase in anagrams(&opts.input, words) {
         for (idx, word) in phrase.iter().enumerate() {
             if idx != 0 {
                 print!(" ");
@@ -65,27 +54,34 @@ fn deduct(from: &CharCounts, counts: &CharCounts) -> Option<CharCounts> {
     Some(difference)
 }
 
-fn anagrams(
+fn anagrams<'word>(
     input: &str,
-    dictionary: &HashTrieMap<Rc<String>, CharCounts>
-) -> Vec<Stack<Rc<String>>> {
+    dictionary: impl Iterator<Item=&'word str>
+) -> Vec<Stack<&'word str>> {
     let mut anagrams = Vec::new();
     let input_char_counts = char_counts(input);
-    anagrams_recurse(input_char_counts, dictionary, &Stack::new(), &mut anagrams);
+    let dictionary_char_counts = dictionary
+        .filter(|candidate| input.ne(*candidate))
+        .map(|candidate| {
+            let counts = char_counts(&candidate);
+            (candidate, counts)
+        })
+        .collect();
+    anagrams_recurse(input_char_counts, &dictionary_char_counts, &Stack::new(), &mut anagrams);
     anagrams
 }
 
-fn anagrams_recurse(
+fn anagrams_recurse<'word>(
     remaining_chars: CharCounts,
-    dictionary: &HashTrieMap<Rc<String>, CharCounts>,
-    working_phrase: &Stack<Rc<String>>,
-    anagrams: &mut Vec<Stack<Rc<String>>>
+    dictionary: &HashTrieMap<&'word str, CharCounts>,
+    working_phrase: &Stack<&'word str>,
+    anagrams: &mut Vec<Stack<&'word str>>
 ) {
     // The dictionary to be used as we recurse, with words we know aren't worth checking removed
     let mut dictionary_out = dictionary.clone();
     for (word, char_counts) in dictionary.iter() {
         if let Some(working_chars) = deduct(&remaining_chars, char_counts) {
-            let working_phrase= working_phrase.push(word.clone());
+            let working_phrase= working_phrase.push(word);
             if working_chars.is_empty() {
                 anagrams.push(working_phrase);
                 continue;
