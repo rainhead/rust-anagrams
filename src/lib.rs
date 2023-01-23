@@ -45,7 +45,7 @@ pub fn anagrams<'word>(
     let mut anagrams = Vec::new();
     let input_char_counts = char_counts(input);
     let dictionary_char_counts = dictionary
-        .filter(|candidate| input.ne(*candidate))
+        .filter(|candidate| input.to_lowercase() != candidate.to_lowercase())
         .map(|candidate| {
             let counts = char_counts(&candidate);
             (candidate, counts)
