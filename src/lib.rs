@@ -36,6 +36,7 @@ fn deduct(from: &CharCounts, counts: &CharCounts) -> Option<CharCounts> {
 /// # use anagram::anagrams;
 /// let dictionary = vec!("pet", "er");
 /// let mut phrases = anagrams("peter", dictionary.into_iter());
+/// phrases.sort(); // hashing order can be nondeterministic
 /// assert_eq!(phrases, vec!["er pet", "pet er"]);
 /// ```
 pub fn anagrams<'word>(
